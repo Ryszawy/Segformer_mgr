@@ -1,14 +1,46 @@
 #!/usr/bin/env bash
 set -e
-# JupyterLab
-mkdir -p /workspace/tmp /workspace/logs
+
+# Katalogi na wolumenie (trwałe)
+mkdir -p /workspace/{code,data,ckpts,logs,tmp}
 export TMPDIR=/workspace/tmp
+
+# Jeśli nie ma repo na wolumenie, skopiuj z obrazu i przepnij editable na /workspace
+if [ ! -d /workspace/code/mmsegmentation/.git ]; then
+  cp -r /opt/mmseg /workspace/code/mmsegmentation
+  pip install -v -e /workspace/code/mmsegmentation
+fi
+
+# --- AUTO-SYMLINK Cityscapes ---
+# Jeśli dataset jest już w /workspace/data/cityscapes, a linku w repo brak – utwórz go.
+if [ -d /workspace/data/cityscapes ]; then
+  mkdir -p /workspace/code/mmsegmentation/data
+  if [ ! -e /workspace/code/mmsegmentation/data/cityscapes ]; then
+    ln -sfn /workspace/data/cityscapes /workspace/code/mmsegmentation/data/cityscapes
+  fi
+fi
+
+# JupyterLab (bez tokena)
 jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root \
   --NotebookApp.token='' --NotebookApp.password='' \
   > /workspace/logs/jupyter.log 2>&1 &
-# TensorBoard (logs + /workspace/logs and work_dirs)
-tensorboard --logdir /workspace/logs:/workspace/code/mmsegmentation/work_dirs \
-  --host 0.0.0.0 --port 6006 > /workspace/logs/tensorboard.log 2>&1 &
 
+# TensorBoard
+tensorboard --logdir /workspace/logs:/workspace/code/mmsegmentation/work_dirs \
+  --host 0.0.0.0 --port 6006 \
+  > /workspace/logs/tensorboard.log 2>&1 &
+
+# (Opcjonalnie) SSH — włącz, jeśli podałeś RUNPOD_SSH_PUBKEY
+if [ -n "${RUNPOD_SSH_PUBKEY}" ]; then
+  mkdir -p /root/.ssh
+  echo "${RUNPOD_SSH_PUBKEY}" > /root/.ssh/authorized_keys
+  chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+  sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || true
+  sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config || true
+  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config || true
+  service ssh start || /usr/sbin/sshd
+fi
+
+# Utrzymaj kontener żywy
 tail -f /dev/null
 
